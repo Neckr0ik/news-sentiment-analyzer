@@ -1,0 +1,8 @@
+output/*.png
+output/*.csv
+output/report.md
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
