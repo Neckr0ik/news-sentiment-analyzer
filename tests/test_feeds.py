@@ -56,3 +56,30 @@ def test_load_articles_json(tmp_path):
     p.write_text(json.dumps([{"title": "Hola", "language": "es"}]), encoding="utf-8")
     arts = feeds.load_articles_json(str(p))
     assert arts[0].title == "Hola" and arts[0].source == "local"
+
+
+def test_entity_declarations_are_refused():
+    bomb = b"""<?xml version="1.0"?><!DOCTYPE r [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;">]>
+<rss><channel><item><title>&b;</title></item></channel></rss>"""
+    assert feeds.fetch_all([feeds.Feed("bomb", "https://x")], getter=lambda url: bomb) == []
+
+
+def test_double_encoded_html_is_stripped():
+    assert feeds.clean_text("&amp;lt;script&amp;gt;alert(1)&amp;lt;/script&amp;gt; Hola") == "alert(1) Hola"
+
+
+def test_http_get_caps_response_size(monkeypatch):
+    import io
+    import pytest
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(feeds, "MAX_FEED_BYTES", 10)
+    monkeypatch.setattr(feeds.urllib.request, "urlopen", lambda req, timeout: Resp(b"x" * 50))
+    with pytest.raises(ValueError, match="larger than"):
+        feeds._http_get("https://example.com/feed")

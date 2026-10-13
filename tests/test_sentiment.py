@@ -101,3 +101,78 @@ def test_claude_refusal_falls_back(fake_client):
     router = sentiment.BackendRouter(mode="auto", claude_client=fake_client)
     rows = sentiment.analyze_batch([art("Enchentes deixam mortos", "pt")], router=router)
     assert rows[0]["backend"] == "lexicon"
+
+
+def test_topic_fixes():
+    assert sentiment.classify_topic("Floods hit the coast", "en") == "Climate"
+    assert sentiment.classify_topic("América gana el partido ante Chivas", "es") == "General"
+    assert sentiment.classify_topic("Nuevo partido político pide registro", "es") == "Politics"
+
+
+def test_topic_tie_goes_to_first_listed():
+    # one Politics keyword and one Economy keyword: Politics is listed first
+    assert sentiment.classify_topic("Government weighs inflation", "en") == "Politics"
+
+
+from tests.conftest import make_status_error as _status_error
+
+
+def test_fallback_is_per_chunk(fake_client):
+    calls = {"n": 0}
+    real_create = fake_client.messages.create
+
+    def flaky(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise anthropic.APIConnectionError(request=None)
+        return real_create(**kwargs)
+
+    fake_client.messages.create = flaky
+    router = sentiment.BackendRouter(mode="auto", claude_client=fake_client)
+    router.claude.batch_size = 2
+    rows = sentiment.analyze_batch([art(f"Huracán deja muertos {i}", "es") for i in range(5)], router=router)
+    assert [r["backend"] for r in rows] == ["claude", "claude", "lexicon", "lexicon", "claude"]
+
+
+def test_malformed_json_falls_back(fake_client):
+    from types import SimpleNamespace
+    fake_client.messages.create = lambda **kw: SimpleNamespace(
+        stop_reason="end_turn", content=[SimpleNamespace(type="text", text="{not json")])
+    router = sentiment.BackendRouter(mode="auto", claude_client=fake_client)
+    rows = sentiment.analyze_batch([art("Huracán deja muertos", "es")], router=router)
+    assert rows[0]["backend"] == "lexicon"
+
+
+def test_programming_errors_are_not_swallowed(fake_client):
+    fake_client.messages.fail = ZeroDivisionError("bug")
+    router = sentiment.BackendRouter(mode="auto", claude_client=fake_client)
+    with pytest.raises(ZeroDivisionError):
+        sentiment.analyze_batch([art("Huracán deja muertos", "es")], router=router)
+
+
+@pytest.mark.parametrize("cls,code", [
+    (anthropic.BadRequestError, 400), (anthropic.AuthenticationError, 401),
+    (anthropic.PermissionDeniedError, 403), (anthropic.NotFoundError, 404),
+])
+def test_forced_claude_stops_on_request_errors(fake_client, cls, code):
+    fake_client.messages.fail = _status_error(cls, code)
+    router = sentiment.BackendRouter(mode="claude", claude_client=fake_client)
+    with pytest.raises(sentiment.ClaudeConfigError, match=str(code)):
+        sentiment.analyze_batch([art("Floods kill dozens", "en")], router=router)
+
+
+def test_auto_disables_claude_after_auth_error(fake_client):
+    fake_client.messages.fail = _status_error(anthropic.AuthenticationError, 401)
+    router = sentiment.BackendRouter(mode="auto", claude_client=fake_client)
+    router.claude.batch_size = 1
+    rows = sentiment.analyze_batch([art("Huracán deja muertos", "es"), art("Enchentes deixam mortos", "pt")],
+                                   router=router)
+    assert [r["backend"] for r in rows] == ["lexicon", "lexicon"]
+    assert len(fake_client.messages.calls) == 1   # no further calls after the 401
+
+
+def test_server_error_falls_back_in_forced_mode(fake_client):
+    fake_client.messages.fail = _status_error(anthropic.InternalServerError, 500)
+    router = sentiment.BackendRouter(mode="claude", claude_client=fake_client)
+    rows = sentiment.analyze_batch([art("Floods kill dozens", "en")], router=router)
+    assert rows[0]["backend"] == "vader"

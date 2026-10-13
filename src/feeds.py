@@ -6,13 +6,15 @@ import json
 import os
 import re
 import urllib.request
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional
+
+from defusedxml.ElementTree import fromstring as _safe_fromstring
 
 DEFAULT_FEEDS_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "feeds.json")
 ATOM = "{http://www.w3.org/2005/Atom}"
 _TAG_RE = re.compile(r"<[^>]+>")
+MAX_FEED_BYTES = 5_000_000   # larger responses are rejected instead of read into memory
 
 
 @dataclass
@@ -51,14 +53,28 @@ def load_feeds(path: str = DEFAULT_FEEDS_PATH,
 
 
 def clean_text(raw: str) -> str:
-    """Strip HTML tags/entities that many feeds embed in <description>."""
-    text = html.unescape(_TAG_RE.sub(" ", raw or ""))
+    """Strip HTML tags/entities that many feeds embed in <description>.
+
+    Feeds often entity-encode their HTML once or twice (``&amp;lt;p&amp;gt;``), so tags are
+    stripped again after every unescape; otherwise encoded markup would come back as live tags.
+    """
+    text = raw or ""
+    for _ in range(3):
+        stripped = _TAG_RE.sub(" ", text)
+        unescaped = html.unescape(stripped)
+        if unescaped == text:
+            break
+        text = unescaped
+    text = _TAG_RE.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
 def parse_feed(raw: bytes, name: str, language: str = "en", max_items: int = 15) -> list[Article]:
-    """Parse RSS 2.0 or Atom XML into Article objects (no network access)."""
-    root = ET.fromstring(raw)
+    """Parse RSS 2.0 or Atom XML into Article objects (no network access).
+
+    Uses defusedxml, which refuses entity declarations (billion laughs) and external entities.
+    """
+    root = _safe_fromstring(raw)
     articles: list[Article] = []
 
     items = root.findall(".//item")
@@ -97,7 +113,10 @@ def parse_feed(raw: bytes, name: str, language: str = "en", max_items: int = 15)
 def _http_get(url: str, timeout: float = 8.0) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": "news-sentiment-analyzer/1.1"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+        data = resp.read(MAX_FEED_BYTES + 1)
+    if len(data) > MAX_FEED_BYTES:
+        raise ValueError(f"feed larger than {MAX_FEED_BYTES:,} bytes; skipped")
+    return data
 
 
 def fetch_feed(feed: Feed, max_items: int = 15,

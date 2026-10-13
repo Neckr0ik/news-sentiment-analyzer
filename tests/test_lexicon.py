@@ -45,3 +45,34 @@ def test_compositional_bigrams():
 def test_death_verbs():
     assert lexicon.score_text("Muere actor a los 34 años", "es")["compound"] < -0.3
     assert lexicon.score_text("Morre ator aos 34 anos", "pt")["compound"] < -0.3
+
+
+def test_negation_stops_at_sentence_boundary():
+    # "no" negates "logra" only; it must not reach "crisis" in the next sentence
+    out = lexicon.score_text("Gobierno no logra acuerdo. Crisis en puerta", "es")
+    assert dict(out["matches"])["crisis"] < 0
+    assert dict(out["matches"])["logra"] < 0
+
+
+def test_negation_flips_only_first_hit():
+    out = lexicon.score_text("no hubo víctimas tras el sismo", "es")
+    m = dict(out["matches"])
+    assert m["victimas"] > 0 and m["sismo"] < 0
+
+
+def test_fixed_expressions_are_not_negations():
+    assert lexicon.score_text("Sin embargo, crece el empleo", "es")["compound"] > 0
+    assert lexicon.score_text("No solo crece el empleo", "es")["compound"] > 0
+    assert lexicon.score_text("No sólo crece el empleo", "es")["compound"] > 0
+    assert lexicon.score_text("Não só cresce o emprego", "pt")["compound"] > 0
+    # a real "sin" still negates
+    assert lexicon.score_text("Sismo sin víctimas", "es")["matches"][-1][1] > 0
+
+
+def test_lexicon_gap_phrases():
+    assert lexicon.score_text("La inflación cae en septiembre", "es")["compound"] > 0
+    assert lexicon.score_text("Baja el desempleo en el país", "es")["compound"] > 0
+    assert lexicon.score_text("Reportan daños graves", "es")["compound"] < 0
+    assert lexicon.score_text("Problemas graves en la red", "es")["compound"] < lexicon.score_text(
+        "Problemas en la red", "es")["compound"]
+    assert lexicon.score_text("Las autoridades no reportan daños graves", "es")["compound"] > 0

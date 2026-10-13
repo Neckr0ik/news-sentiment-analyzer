@@ -1,11 +1,16 @@
 """
 Small, curated news-tone lexicons for Spanish and Portuguese (offline fallback).
 
-This is deliberately simple and transparent: a few hundred hand-picked words
-with valences in [-3, 3], plus VADER-style negation and intensifier handling,
-normalised to a compound score in [-1, 1]. It is good enough to rank headlines
+This is deliberately simple and transparent: roughly 140-170 hand-picked words and
+short phrases per language with valences in [-3, 3], plus VADER-style negation and
+intensifier handling, normalised to a compound score in [-1, 1]. It is good enough to rank headlines
 by tone and to run fully offline; it is NOT a validated sentiment model.
 Accents are folded, so "crisis"/"crísis" and "não"/"nao" match the same entry.
+
+Negation rules: a negator ("no", "sin", "não"...) flips only the first lexicon entry
+found within NEGATION_WINDOW tokens after it, and never crosses a sentence boundary
+(. ! ? ;). Fixed expressions that are not negations ("sin embargo", "no solo",
+"não só", "não apenas"...) are ignored.
 """
 from __future__ import annotations
 
@@ -38,7 +43,8 @@ ES_LEXICON: dict[str, float] = {
     "recortes": -1.5, "despidos": -2, "pobreza": -2, "escasez": -2, "riesgo": -1,
     "preocupacion": -1.5, "temor": -1.5, "miedo": -2, "alerta": -1.5, "falla": -1.5,
     # general negative
-    "malo": -2, "mala": -2, "peor": -2.5, "grave": -2, "dificil": -1, "problema": -1.5,
+    "malo": -2, "mala": -2, "peor": -2.5, "grave": -2, "graves": -2, "danos graves": -2,
+    "dificil": -1, "problema": -1.5,
     "problemas": -1.5, "fracaso": -2.5, "fracasa": -2.5, "triste": -2, "dolor": -2,
     "enfermedad": -1.5, "epidemia": -2, "brote": -1.5,
     # positive
@@ -52,7 +58,8 @@ ES_LEXICON: dict[str, float] = {
     "feliz": 2.5, "innovacion": 1.5, "premio": 2, "reconocimiento": 2, "estabilidad": 1.5,
     "salva": 2, "solucion": 1.5, "oportunidad": 1.5, "fortalece": 1.5,
     "desempleo cae": 1.5, "baja la inflacion": 1.5, "inflacion baja": 1.5, "cae la inflacion": 1.5,
-    "cae el desempleo": 1.5,
+    "cae el desempleo": 1.5, "inflacion cae": 1.5, "baja el desempleo": 1.5,
+    "desempleo baja": 1.5,
 }
 
 PT_LEXICON: dict[str, float] = {
@@ -73,7 +80,7 @@ PT_LEXICON: dict[str, float] = {
     "perda": -1.5, "perdas": -1.5, "perde": -1.5, "corte": -1, "cortes": -1.5,
     "demissoes": -2, "pobreza": -2, "escassez": -2, "risco": -1, "preocupacao": -1.5,
     "medo": -2, "alerta": -1.5, "falha": -1.5,
-    "ruim": -2, "pior": -2.5, "grave": -2, "dificil": -1, "problema": -1.5,
+    "ruim": -2, "pior": -2.5, "grave": -2, "graves": -2, "dificil": -1, "problema": -1.5,
     "problemas": -1.5, "fracasso": -2.5, "triste": -2, "dor": -2, "doenca": -1.5,
     "epidemia": -2, "surto": -1.5,
     "bom": 2, "boa": 2, "bons": 2, "boas": 2, "melhor": 2, "melhora": 2, "excelente": 3,
@@ -85,6 +92,7 @@ PT_LEXICON: dict[str, float] = {
     "feliz": 2.5, "inovacao": 1.5, "premio": 2, "estabilidade": 1.5,
     "salva": 2, "solucao": 1.5, "oportunidade": 1.5, "fortalece": 1.5,
     "desemprego cai": 1.5, "inflacao cai": 1.5, "cai a inflacao": 1.5, "cai o desemprego": 1.5,
+    "desemprego recua": 1.5, "inflacao recua": 1.5,
 }
 
 NEGATIONS = {
@@ -97,6 +105,11 @@ INTENSIFIERS = {
     "pt": {"muito": 0.3, "extremamente": 0.4, "tao": 0.2, "grande": 0.2,
            "forte": 0.2, "enorme": 0.3},
 }
+# "<negator> <next token>" pairs that are fixed expressions, not negations.
+NOT_NEGATIONS = {
+    "es": {("sin", "embargo"), ("no", "solo"), ("no", "solamente")},
+    "pt": {("nao", "so"), ("nao", "apenas"), ("nao", "somente")},
+}
 LEXICONS = {"es": ES_LEXICON, "pt": PT_LEXICON}
 
 NEGATION_FACTOR = -0.74   # same dampened flip VADER uses
@@ -104,6 +117,7 @@ NEGATION_WINDOW = 3       # tokens after a negator whose valence is flipped
 ALPHA = 15                # VADER normalisation constant
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
+_SENTENCE_RE = re.compile(r"[.!?;]+")
 
 
 def fold(text: str) -> str:
@@ -116,35 +130,49 @@ def tokenize(text: str) -> list[str]:
     return _WORD_RE.findall(fold(text))
 
 
+def sentences(text: str) -> list[list[str]]:
+    """Token lists per sentence; negation never carries across . ! ? ;"""
+    return [toks for part in _SENTENCE_RE.split(fold(text)) if (toks := _WORD_RE.findall(part))]
+
+
+def _is_negator(tokens: list[str], i: int, language: str) -> bool:
+    if tokens[i] not in NEGATIONS[language]:
+        return False
+    nxt = tokens[i + 1] if i + 1 < len(tokens) else ""
+    return (tokens[i], nxt) not in NOT_NEGATIONS[language]
+
+
 def score_text(text: str, language: str) -> dict:
     """Return {'compound': float in [-1, 1], 'matches': [(token, valence), ...]}."""
     lexicon = LEXICONS[language]
-    negators = NEGATIONS[language]
     boosters = INTENSIFIERS[language]
-    tokens = tokenize(text)
 
     total = 0.0
     matches: list[tuple[str, float]] = []
-    i = 0
-    while i < len(tokens):
-        # longest entry first: three-word, two-word ("se desploma", "desempleo cae"), single word
-        for width in (3, 2, 1):
-            word = " ".join(tokens[i:i + width])
-            if i + width <= len(tokens) and word in lexicon:
-                valence = lexicon[word]
-                break
-        else:
-            i += 1
-            continue
+    for tokens in sentences(text):
+        negated_until = -1   # last token index still inside an open negation window
+        i = 0
+        while i < len(tokens):
+            # longest entry first: three-word, two-word ("se desploma", "desempleo cae"), single word
+            for width in (3, 2, 1):
+                word = " ".join(tokens[i:i + width])
+                if i + width <= len(tokens) and word in lexicon:
+                    valence = lexicon[word]
+                    break
+            else:
+                if _is_negator(tokens, i, language):
+                    negated_until = i + NEGATION_WINDOW
+                i += 1
+                continue
 
-        window = tokens[max(0, i - NEGATION_WINDOW):i]
-        if i > 0 and tokens[i - 1] in boosters:
-            valence += math.copysign(boosters[tokens[i - 1]], valence)
-        if any(t in negators for t in window):
-            valence *= NEGATION_FACTOR
-        total += valence
-        matches.append((word, round(valence, 2)))
-        i += width
+            if i > 0 and tokens[i - 1] in boosters:
+                valence += math.copysign(boosters[tokens[i - 1]], valence)
+            if i <= negated_until:
+                valence *= NEGATION_FACTOR
+                negated_until = -1   # a negator flips only the first entry after it
+            total += valence
+            matches.append((word, round(valence, 2)))
+            i += width
 
     compound = total / math.sqrt(total * total + ALPHA) if total else 0.0
     return {"compound": round(compound, 4), "matches": matches}
