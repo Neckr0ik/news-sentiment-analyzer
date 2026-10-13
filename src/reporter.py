@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import re
+from urllib.parse import quote, urlsplit
 
 import matplotlib
 matplotlib.use("Agg")  # headless: works in CI and over SSH
@@ -11,6 +13,37 @@ import seaborn as sns
 
 sns.set_theme(style="darkgrid", palette="muted")
 DEFAULT_OUT = "output"
+
+_MD_SPECIAL = re.compile(r"([\\`*_\[\]()!|#])")
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def md_text(value) -> str:
+    """Escape markdown/HTML syntax so feed text can't add links, images or tags to the report."""
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    text = _MD_SPECIAL.sub(r"\\\1", text)
+    return text.replace("<", "&lt;").replace(">", "&gt;")
+
+
+def safe_link(url) -> str:
+    """Return the URL ready for a markdown link, or "" unless it is an absolute http(s) URL."""
+    url = str(url or "").strip()
+    parts = urlsplit(url)
+    if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+        return ""
+    # percent-encode anything that could end the link target early or open markup
+    return quote(url, safe=":/?#@!$&'*+,;=%~[]-._")
+
+
+def csv_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy of df where text cells starting with = + - @ (or tab/CR) get a leading quote,
+    so spreadsheet apps show them as text instead of running them as formulas."""
+    out = df.copy()
+    for col in out.columns:
+        if not pd.api.types.is_numeric_dtype(out[col]):
+            out[col] = out[col].map(
+                lambda v: "'" + v if isinstance(v, str) and v.startswith(_CSV_FORMULA_PREFIXES) else v)
+    return out
 
 
 def _save(out_dir: str, name: str) -> str:
@@ -69,6 +102,13 @@ def plot_all(df: pd.DataFrame, out_dir: str = DEFAULT_OUT) -> list[str]:
             plot_score_distribution(df, out_dir), plot_heatmap(df, out_dir)]
 
 
+def _headline_line(row) -> str:
+    title = md_text(str(row["title"])[:80])
+    link = safe_link(row.get("link", ""))
+    head = f"[{title}]({link})" if link else title
+    return f"- {head} `{row['score']:+.3f}` ({md_text(row['source'])})\n"
+
+
 def write_markdown_report(df: pd.DataFrame, path: str) -> str:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     total = len(df)
@@ -89,14 +129,12 @@ def write_markdown_report(df: pd.DataFrame, path: str) -> str:
         "\n| Language | Backend | Articles | Avg score |\n|:---|:---|---:|---:|\n",
     ]
     for (lang, backend), grp in df.groupby(["language", "backend"]):
-        lines.append(f"| {lang} | {backend} | {len(grp)} | {grp['score'].mean():+.3f} |\n")
+        lines.append(f"| {md_text(lang)} | {md_text(backend)} | {len(grp)} | {grp['score'].mean():+.3f} |\n")
 
     lines.append("\n## Top 5 Most Negative Headlines\n")
-    for _, row in df.nsmallest(5, "score").iterrows():
-        lines.append(f"- [{row['title'][:80]}]({row['link']}) `{row['score']:+.3f}` ({row['source']})\n")
+    lines.extend(_headline_line(row) for _, row in df.nsmallest(5, "score").iterrows())
     lines.append("\n## Top 5 Most Positive Headlines\n")
-    for _, row in df.nlargest(5, "score").iterrows():
-        lines.append(f"- [{row['title'][:80]}]({row['link']}) `{row['score']:+.3f}` ({row['source']})\n")
+    lines.extend(_headline_line(row) for _, row in df.nlargest(5, "score").iterrows())
     lines.append("\n---\n*Scores describe headline tone as estimated by the listed backend "
                  "(VADER, an offline lexicon, or an LLM). They are not a measure of audience opinion.*\n")
 

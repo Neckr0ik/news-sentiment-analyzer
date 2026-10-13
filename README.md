@@ -8,7 +8,7 @@
 
 This tool fetches RSS/Atom feeds, scores each headline's tone with a **backend that fits its language**, classifies it by topic, and writes charts, a CSV and a markdown report.
 
-> Inspired by editorial analytics work at UNIFE México, where a Reuters partnership fed three daily news programs that needed editorial signals from international wire content.
+> Inspired by editorial analytics work at a Mexican broadcast network, where a Reuters partnership fed three daily news programs.
 
 ---
 
@@ -18,13 +18,13 @@ This tool fetches RSS/Atom feeds, scores each headline's tone with a **backend t
 |---|---|---|
 | English (`en`) | **VADER** (`vaderSentiment`) | Offline, rule-based, tuned for short English text. |
 | Spanish (`es`), Portuguese (`pt`) | **Claude API**, *if* `ANTHROPIC_API_KEY` is set | Multilingual; headlines are sent in batches of 20 and come back as structured JSON scores in [-1, 1]. The default model id is set in `src/sentiment.py` (`DEFAULT_CLAUDE_MODEL`); override it with `NEWS_SENTIMENT_CLAUDE_MODEL`. |
-| Spanish, Portuguese (no key) | **Offline lexicon** (`src/lexicon.py`) | About 140–160 curated news words per language, with accent folding, negation (`no`, `sin`, `não`, `nem`…), intensifiers (`muy`, `muito`…) and a few multi-word entries (`cae el desempleo`). It uses VADER's normalisation. |
+| Spanish, Portuguese (no key) | **Offline lexicon** (`src/lexicon.py`) | About 140–170 curated entries per language (single words plus a few phrases such as `cae el desempleo`), with accent folding, intensifiers (`muy`, `muito`…) and negation (`no`, `sin`, `não`, `nem`…). A negator flips only the first entry after it and stops at the end of the sentence; `sin embargo`, `no solo` and `não só` are not treated as negation. It uses VADER's normalisation. |
 
-If a Claude call fails (network, rate limit, refusal, malformed output), that batch is scored with the offline backend and the run continues. The `backend` column in `results.csv` records which backend scored each row.
+If a Claude call fails (network, rate limit, server error, refusal, malformed output), only that batch of 20 is scored with the offline backend; batches Claude already scored are kept and the run continues. If the API rejects the request itself (HTTP 400/401/403/404: bad key, no permission, unknown model), `--backend claude` stops with exit code 3 and an error message; in `auto` mode Claude is switched off for the rest of the run and the offline backends take over. The `backend` column in `results.csv` records which backend scored each row.
 
 Labels: `positive` if score ≥ 0.05, `negative` if ≤ -0.05, otherwise `neutral` (the VADER convention, used for every backend).
 
-Topics (`Politics`, `Economy`, `Technology`, `Conflict`, `Climate`, `Health`, `Business`, else `General`) come from per-language keyword lists with word-boundary matching.
+Topics (`Politics`, `Economy`, `Technology`, `Conflict`, `Climate`, `Health`, `Business`, else `General`) come from per-language keyword lists with word-boundary matching. The topic with the most keyword hits wins; a tie goes to the topic listed first (in the order above). A bare Spanish `partido` is not a Politics keyword (it usually means a match); `partido político` is.
 
 ---
 
@@ -49,7 +49,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Python 3.11+. The `anthropic` package is installed but only used when `ANTHROPIC_API_KEY` is set.
+Python 3.11+. The `anthropic` package is installed but only used when `ANTHROPIC_API_KEY` is set. Feeds are parsed with `defusedxml` (entity declarations and external entities are refused) and responses over 5 MB are skipped.
 
 ## Usage
 
@@ -65,14 +65,14 @@ python main.py --backend lexicon        # force the offline backends
 
 | Output | Content |
 |---|---|
-| `output/results.csv` | One row per article: source, language, title, topic, sentiment, score, backend, link |
-| `output/report.md` | Totals, a language × backend table, and the 5 most negative and 5 most positive headlines |
+| `output/results.csv` | One row per article: source, language, title, topic, sentiment, score, backend, link. Text cells that start with `=`, `+`, `-` or `@` get a leading `'` so spreadsheet apps don't run them as formulas. |
+| `output/report.md` | Totals, a language × backend table, and the 5 most negative and 5 most positive headlines. Markdown and HTML in headlines are escaped; only `http`/`https` links are kept. |
 | `01_sentiment_by_source.png` | Positive/neutral/negative counts per source |
 | `02_sentiment_by_topic.png` | Average score per topic |
 | `03_score_distribution.png` | Score distribution per topic |
 | `04_source_topic_heatmap.png` | Source × topic average score (blank = no articles) |
 
-`data/sample_headlines.json` holds 15 made-up example headlines (5 per language) for the offline demo. They are not real news.
+`data/sample_headlines.json` holds 15 made-up example headlines for the offline demo (5 English, 6 Spanish, 4 Portuguese). They are not real news.
 
 ---
 
