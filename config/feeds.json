@@ -1,0 +1,18 @@
+{
+  "_comment": "RSS/Atom feeds used by main.py. 'language' is an ISO 639-1 code (en, es, pt) and selects the sentiment backend. Add, remove or edit entries freely; URLs change over time.",
+  "feeds": [
+    {"name": "BBC - World",        "url": "https://feeds.bbci.co.uk/news/world/rss.xml",      "language": "en", "region": "UK"},
+    {"name": "BBC - Technology",   "url": "https://feeds.bbci.co.uk/news/technology/rss.xml", "language": "en", "region": "UK"},
+    {"name": "The Guardian - World", "url": "https://www.theguardian.com/world/rss",           "language": "en", "region": "UK"},
+
+    {"name": "El Universal",       "url": "https://www.eluniversal.com.mx/arc/outboundfeeds/rss/?outputType=xml", "language": "es", "region": "MX"},
+    {"name": "El Financiero",      "url": "https://www.elfinanciero.com.mx/arc/outboundfeeds/rss/?outputType=xml", "language": "es", "region": "MX"},
+    {"name": "La Jornada",         "url": "https://www.jornada.com.mx/rss/edicion.xml",        "language": "es", "region": "MX"},
+    {"name": "Expansión",          "url": "https://expansion.mx/rss",                          "language": "es", "region": "MX"},
+    {"name": "BBC Mundo",          "url": "https://feeds.bbci.co.uk/mundo/rss.xml",            "language": "es", "region": "LATAM"},
+
+    {"name": "Folha de S.Paulo",   "url": "https://feeds.folha.uol.com.br/emcimadahora/rss091.xml", "language": "pt", "region": "BR"},
+    {"name": "g1",                 "url": "https://g1.globo.com/rss/g1/",                      "language": "pt", "region": "BR"},
+    {"name": "BBC News Brasil",    "url": "https://feeds.bbci.co.uk/portuguese/rss.xml",       "language": "pt", "region": "BR"}
+  ]
+}
