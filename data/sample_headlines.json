@@ -1,0 +1,19 @@
+[
+  {"source": "Sample - EN", "language": "en", "title": "Central bank holds rates steady as inflation cools", "description": "Policymakers signalled patience after a third month of slower price growth."},
+  {"source": "Sample - EN", "language": "en", "title": "Floods kill dozens and displace thousands in coastal region", "description": "Rescue teams warn the death toll could rise."},
+  {"source": "Sample - EN", "language": "en", "title": "Local startup wins award for affordable water-purification tech", "description": "The device was praised for its low cost and simple design."},
+  {"source": "Sample - EN", "language": "en", "title": "Ceasefire talks collapse after overnight missile attack", "description": ""},
+  {"source": "Sample - EN", "language": "en", "title": "City council publishes annual budget", "description": "The document is available on the council website."},
+
+  {"source": "Muestra - ES", "language": "es", "title": "Huracán deja dos muertos y cientos de viviendas dañadas en la costa", "description": "Protección Civil mantiene la alerta en tres municipios."},
+  {"source": "Muestra - ES", "language": "es", "title": "La economía crece más de lo esperado y se recupera el empleo formal", "description": "El avance fue impulsado por la inversión y las exportaciones."},
+  {"source": "Muestra - ES", "language": "es", "title": "Investigan red de corrupción en compras de medicamentos", "description": "La denuncia señala un presunto fraude millonario."},
+  {"source": "Muestra - ES", "language": "es", "title": "No hubo víctimas tras el sismo de esta mañana", "description": "Las autoridades no reportan daños graves."},
+  {"source": "Muestra - ES", "language": "es", "title": "Selección femenil logra histórica victoria en el torneo", "description": "El equipo celebra su mejor resultado."},
+  {"source": "Muestra - ES", "language": "es", "title": "El peso cae frente al dólar por temor a recesión global", "description": ""},
+
+  {"source": "Amostra - PT", "language": "pt", "title": "Enchentes deixam mortos e milhares de desabrigados no Sul", "description": "A Defesa Civil emitiu novo alerta."},
+  {"source": "Amostra - PT", "language": "pt", "title": "Pesquisadores comemoram avanço em vacina contra a dengue", "description": "Resultados mostram boa proteção e poucos efeitos adversos."},
+  {"source": "Amostra - PT", "language": "pt", "title": "Desemprego cai e investimento cresce no trimestre", "description": ""},
+  {"source": "Amostra - PT", "language": "pt", "title": "Governo apresenta calendário de audiências públicas", "description": "As sessões serão transmitidas online."}
+]

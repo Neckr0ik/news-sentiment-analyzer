@@ -1,4 +1,8 @@
 vaderSentiment>=3.3.2
-pandas>=2.0.0
-matplotlib>=3.7.0
-seaborn>=0.12.0
+pandas>=2.1.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+# Optional Claude backend (only used when ANTHROPIC_API_KEY is set)
+anthropic>=1.0.0
+# Tests
+pytest>=8.0.0

@@ -1,8 +1,7 @@
-output/*.png
-output/*.csv
-output/report.md
+output/
 __pycache__/
 *.pyc
+.pytest_cache/
 .env
 venv/
 .venv/
