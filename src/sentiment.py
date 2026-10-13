@@ -66,13 +66,14 @@ TOPIC_KEYWORDS = {
         "Economy":    ["inflation", "gdp", "market", "markets", "stock", "trade", "tariff", "tariffs", "recession", "fed", "bank"],
         "Technology": ["ai", "artificial intelligence", "tech", "software", "cyber", "digital", "startup"],
         "Conflict":   ["war", "military", "attack", "conflict", "troops", "ceasefire", "missile", "bomb"],
-        "Climate":    ["climate", "carbon", "emission", "emissions", "flood", "wildfire", "renewable", "hurricane"],
+        "Climate":    ["climate", "carbon", "emission", "emissions", "flood", "floods", "wildfire", "wildfires",
+                       "renewable", "hurricane"],
         "Health":     ["health", "hospital", "vaccine", "disease", "pandemic", "drug", "cancer", "medicine"],
         "Business":   ["merger", "acquisition", "revenue", "profit", "ceo", "company", "earnings", "deal"],
     },
     "es": {
         "Politics":   ["elección", "elecciones", "presidente", "presidenta", "gobierno", "senado", "diputados",
-                       "congreso", "reforma", "votación", "partido"],
+                       "congreso", "reforma", "votación", "partido político", "partidos políticos"],
         "Economy":    ["inflación", "pib", "mercado", "mercados", "bolsa", "aranceles", "banxico", "economía",
                        "recesión", "dólar", "tasas"],
         "Technology": ["ia", "inteligencia artificial", "tecnología", "ciberseguridad", "digital", "software"],
@@ -100,7 +101,13 @@ _TOPIC_PATTERNS = {
 
 
 def classify_topic(text: str, language: str = "en") -> str:
-    """Keyword topic for a headline; returns 'General' when nothing matches."""
+    """Keyword topic for a headline; returns 'General' when nothing matches.
+
+    The topic with the most matching keywords wins. Ties go to the topic listed first in
+    TOPIC_KEYWORDS (Politics, Economy, Technology, Conflict, Climate, Health, Business),
+    so the result is deterministic. A bare "partido" is not a Politics keyword because in
+    Spanish news it usually means a football match; only "partido político" counts.
+    """
     patterns = _TOPIC_PATTERNS.get(language, _TOPIC_PATTERNS["en"])
     folded = lexicon.fold(text)
     scores = {topic: sum(bool(p.search(folded)) for p in pats) for topic, pats in patterns.items()}
@@ -130,7 +137,28 @@ class LexiconBackend:
 
 
 class ClaudeBackendError(RuntimeError):
-    pass
+    """Claude answered, but the answer could not be used (refusal, truncation, bad JSON)."""
+
+
+class ClaudeConfigError(RuntimeError):
+    """The request itself is rejected (bad key, no permission, unknown model, bad request).
+
+    Retrying or falling back per chunk would not help, so a forced ``--backend claude``
+    run stops with this error instead of silently scoring everything offline.
+    """
+
+
+FATAL_STATUS_CODES = {400, 401, 403, 404}
+
+
+def _recoverable_errors() -> tuple:
+    """Errors after which one chunk is rescored offline and the run continues."""
+    errors: tuple = (ClaudeBackendError, json.JSONDecodeError, KeyError)
+    try:
+        import anthropic
+    except ImportError:
+        return errors
+    return errors + (anthropic.APIStatusError, anthropic.APIConnectionError)
 
 
 _CLAUDE_SYSTEM = (
@@ -189,7 +217,10 @@ class ClaudeBackend:
         text = next((b.text for b in response.content if b.type == "text"), None)
         if text is None:
             raise ClaudeBackendError("no text block in response")
-        by_id = {r["id"]: float(r["score"]) for r in json.loads(text)["results"]}
+        try:
+            by_id = {int(r["id"]): float(r["score"]) for r in json.loads(text)["results"]}
+        except (KeyError, TypeError, ValueError) as e:  # JSONDecodeError is a ValueError
+            raise ClaudeBackendError(f"malformed JSON output ({type(e).__name__}: {e})") from e
         missing = [i for i in range(len(texts)) if i not in by_id]
         if missing:
             raise ClaudeBackendError(f"missing scores for ids {missing}")
@@ -207,7 +238,13 @@ def claude_available() -> bool:
 
 
 class BackendRouter:
-    """Chooses a backend per language and falls back offline if Claude fails."""
+    """Chooses a backend per language and falls back offline if Claude fails.
+
+    Fallback is per chunk: chunks Claude scored are kept, and only a failed chunk is
+    rescored offline. Auth/request errors (HTTP 400/401/403/404) stop a forced
+    ``mode="claude"`` run with ClaudeConfigError; in ``auto`` mode they switch Claude off
+    for the rest of the run and the offline backends take over.
+    """
 
     def __init__(self, mode: str = "auto", claude_client=None, claude_model: Optional[str] = None):
         if mode not in ("auto", "vader", "lexicon", "claude"):
@@ -236,15 +273,38 @@ class BackendRouter:
             return self.vader
         return self.claude or self.lexicon
 
-    def score(self, texts: list[str], language: str) -> tuple[list[float], str]:
+    def score(self, texts: list[str], language: str) -> tuple[list[float], list[str]]:
+        """Return (scores, backend name per text)."""
         backend = self.backend_for(language)
-        if backend is self.claude:
-            try:
-                return backend.score_batch(texts, language), backend.name
-            except Exception as e:  # API/network/format errors: degrade to the offline backend
-                print(f"  [warn] Claude backend failed ({type(e).__name__}: {e}); using offline backend")
-                backend = self.offline_for(language)
-        return backend.score_batch(texts, language), backend.name
+        if backend is not self.claude:
+            return backend.score_batch(texts, language), [backend.name] * len(texts)
+
+        recoverable = _recoverable_errors()
+        offline = self.offline_for(language)
+        scores: list[float] = []
+        names: list[str] = []
+        for start in range(0, len(texts), backend.batch_size):
+            chunk = texts[start:start + backend.batch_size]
+            if self.claude is not None:
+                try:
+                    scores.extend(backend.score_batch(chunk, language))
+                    names.extend([backend.name] * len(chunk))
+                    continue
+                except recoverable as e:
+                    status = getattr(e, "status_code", None)
+                    if status in FATAL_STATUS_CODES:
+                        message = (f"Claude API rejected the request (HTTP {status}: {type(e).__name__}). "
+                                   "Check ANTHROPIC_API_KEY and NEWS_SENTIMENT_CLAUDE_MODEL.")
+                        if self.mode == "claude":
+                            raise ClaudeConfigError(message) from e
+                        print(f"  [warn] {message} Using the offline backends for the rest of the run.")
+                        self.claude = None
+                    else:
+                        print(f"  [warn] Claude backend failed on {len(chunk)} items "
+                              f"({type(e).__name__}: {e}); scoring them offline")
+            scores.extend(offline.score_batch(chunk, language))
+            names.extend([offline.name] * len(chunk))
+        return scores, names
 
 
 def analyze_batch(articles: Iterable, backend: str = "auto", router: Optional[BackendRouter] = None) -> list[dict]:
@@ -260,8 +320,8 @@ def analyze_batch(articles: Iterable, backend: str = "auto", router: Optional[Ba
     for lang in sorted(set(langs)):
         idx = [i for i, l in enumerate(langs) if l == lang]
         values, used = router.score([articles[i].full_text for i in idx], lang)
-        for i, v in zip(idx, values):
-            scores[i] = (v, used)
+        for i, v, name in zip(idx, values, used):
+            scores[i] = (v, name)
 
     results = []
     for i, art in enumerate(articles):

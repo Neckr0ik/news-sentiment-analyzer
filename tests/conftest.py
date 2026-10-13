@@ -33,3 +33,16 @@ def fake_client():
 def no_api_key(monkeypatch):
     # Tests must never reach the network: make sure no real key is picked up.
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+
+def make_status_error(cls, code):
+    """Build an anthropic APIStatusError subclass with a fake HTTP response (no network)."""
+    import importlib
+    for name in ("httpx2", "httpx"):  # the SDK's HTTP library has been renamed across versions
+        try:
+            http = importlib.import_module(name)
+            break
+        except ImportError:
+            continue
+    req = http.Request("POST", "http://test/v1/messages")
+    return cls("err", response=http.Response(code, request=req), body=None)

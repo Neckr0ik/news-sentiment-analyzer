@@ -12,13 +12,14 @@ ANTHROPIC_API_KEY is set, otherwise an offline curated lexicon.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
 import pandas as pd
 
 from src.feeds import DEFAULT_FEEDS_PATH, fetch_all, load_articles_json, load_feeds
-from src.sentiment import BackendRouter, analyze_batch, claude_available
+from src.sentiment import BackendRouter, ClaudeConfigError, analyze_batch, claude_available
 
 DEMO_PATH = os.path.join(os.path.dirname(__file__), "data", "sample_headlines.json")
 
@@ -50,7 +51,15 @@ def main(argv=None) -> int:
     print("\n[1/3] Loading articles...")
     if args.demo or args.input:
         path = args.input or DEMO_PATH
-        articles = load_articles_json(path)
+        if not os.path.isfile(path):
+            print(f"  Input file not found: {path}")
+            return 2
+        try:
+            articles = load_articles_json(path)
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError, UnicodeDecodeError) as e:
+            print(f"  Could not read {path}: expected a JSON list of objects with a \"title\" "
+                  f"({type(e).__name__}: {e})")
+            return 2
         print(f"  Loaded {len(articles)} articles from {path}")
     else:
         feeds = load_feeds(args.feeds, args.languages.split(","))
@@ -64,18 +73,22 @@ def main(argv=None) -> int:
     print("\n[2/3] Running sentiment analysis...")
     if args.backend == "auto":
         print("  Spanish/Portuguese backend: " + ("Claude API" if claude_available() else "offline lexicon"))
-    df = pd.DataFrame(analyze_batch(articles, router=BackendRouter(mode=args.backend)))
+    try:
+        df = pd.DataFrame(analyze_batch(articles, router=BackendRouter(mode=args.backend)))
+    except ClaudeConfigError as e:
+        print(f"  Error: {e}")
+        return 3
 
+    from src.reporter import csv_safe, write_markdown_report  # imports matplotlib (Agg backend)
     os.makedirs(args.out, exist_ok=True)
-    df.to_csv(os.path.join(args.out, "results.csv"), index=False, encoding="utf-8")
+    csv_safe(df).to_csv(os.path.join(args.out, "results.csv"), index=False, encoding="utf-8")
     print(f"  Analyzed {len(df)} articles across {df['source'].nunique()} sources")
 
     print("\n[3/3] Writing report" + ("" if args.no_charts else " and charts") + "...")
     if not args.no_charts:
-        from src.reporter import plot_all  # matplotlib import only when needed
+        from src.reporter import plot_all
         for path in plot_all(df, args.out):
             print(f"  chart  -> {path}")
-    from src.reporter import write_markdown_report
     print(f"  report -> {write_markdown_report(df, os.path.join(args.out, 'report.md'))}")
 
     print("\n" + "=" * 50)
